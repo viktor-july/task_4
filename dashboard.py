@@ -24,7 +24,6 @@ def load():
 
 orders, users, books = load()
 
-# ── Tools ───────────────────────────────────────────────────
 def tool_unique_users(store=None):
     df = orders if not store or store == "All" else orders[orders.store == store]
     return int(df.user_id.nunique())
@@ -69,7 +68,6 @@ TOOLS = [
 ]
 TOOL_MAP = {t["function"]["name"]: globals()[t["function"]["name"]] for t in TOOLS}
 
-# ── UI ──────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📚 Bookstore")
     sel = st.selectbox("Store", ["All stores"] + STORES)
@@ -105,7 +103,6 @@ with t3:
     fig.update_traces(textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
 
-# ── Chat (Part 2) ───────────────────────────────────────────
 with t4:
     if "msgs" not in st.session_state:
         st.session_state.msgs = [{"role": "system", "content": "You are a data analyst. Always use tools for any numbers or lists. Never invent data. Stores: STORE1-STORE5 or All."}]
