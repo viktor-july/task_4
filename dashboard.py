@@ -4,147 +4,79 @@ import yaml
 from pathlib import Path
 import plotly.express as px
 
-st.set_page_config(
-    page_title="Bookstore Dashboard",
-    page_icon="📚",
-    layout="wide",
-)
+st.set_page_config(page_title="Bookstore Analytics", page_icon="📚", layout="wide")
+st.markdown("""<style>
+div[data-testid="stMetric"]{background:#1e293b;border:1px solid #334155;padding:14px;border-radius:10px}
+.tag{display:inline-block;background:#1e40af;color:#fff;padding:3px 10px;border-radius:16px;margin:2px;font-size:.85rem}
+.tag-g{background:#047857}
+</style>""", unsafe_allow_html=True)
 
-DATA_ROOT = Path("data/cleaned")
+DATA = Path("data/cleaned")
 STORES = [f"STORE{i}" for i in range(1, 6)]
 
+@st.cache_data
+def load():
+    o, u, b = [], [], []
+    for s in STORES:
+        p = DATA / s
+        df = pd.read_parquet(p / "orders.parquet").assign(store=s)
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+        o.append(df)
+        u.append(pd.read_csv(p / "users.csv").assign(store=s))
+        with open(p / "books.yaml") as f:
+            b.append(pd.DataFrame(yaml.safe_load(f)).assign(store=s))
+    orders = pd.concat(o).assign(revenue=lambda x: x.paid_price)
+    return orders, pd.concat(u), pd.concat(b)
 
-@st.cache_data(show_spinner="Loading data…")
-def load_all_data():
-    orders_list, users_list, books_list = [], [], []
+orders, users, books = load()
 
-    for store in STORES:
-        store_path = DATA_ROOT / store
+with st.sidebar:
+    st.title("📚 Bookstore")
+    sel = st.selectbox("Store", ["All stores"] + STORES)
 
-        o = pd.read_parquet(store_path / "orders.parquet")
-        o["store"] = store
-        o["date"] = pd.to_datetime(o["date"]).dt.date
-        orders_list.append(o)
+o = orders if sel == "All stores" else orders.query("store == @sel")
+b = books if sel == "All stores" else books.query("store == @sel")
 
-        u = pd.read_csv(store_path / "users.csv")
-        u["store"] = store
-        users_list.append(u)
+daily = o.groupby("date", as_index=False).revenue.sum().sort_values("revenue", ascending=False)
+top5 = daily.head(5).assign(date=lambda x: x.date.map(lambda d: d.strftime("%Y-%m-%d")),
+                            revenue_fmt=lambda x: x.revenue.map("${:,.2f}".format))
 
-        with open(store_path / "books.yaml", encoding="utf-8") as f:
-            books_raw = yaml.safe_load(f)
-        b = pd.DataFrame(books_raw)
-        b["store"] = store
-        books_list.append(b)
+merged = o.merge(b[["id", "author"]].drop_duplicates(), left_on="book_id", right_on="id", how="left")
+pop = merged.groupby("author").quantity.sum().nlargest(1)
+best = o.groupby("user_id").revenue.sum().nlargest(1)
 
-    orders = pd.concat(orders_list, ignore_index=True)
-    users = pd.concat(users_list, ignore_index=True)
-    books = pd.concat(books_list, ignore_index=True)
+st.title("Bookstore Analytics Dashboard")
+st.caption(f"Viewing: **{sel}**")
 
-    orders["revenue"] = orders["paid_price"]
+t1, t2, t3 = st.tabs(["📊 Overview", "📈 Daily Revenue", "🏆 Top 5 Days"])
 
-    return orders, users, books
+with t1:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Unique Users", f"{o.user_id.nunique():,}")
+    c2.metric("Unique Authors", f"{b.author.nunique():,}")
+    c3.metric("Orders", f"{len(o):,}")
+    c4.metric("Revenue", f"${o.revenue.sum():,.0f}")
 
+    st.markdown("**Most popular author(s)**")
+    st.markdown("".join(f'<span class="tag">{a}</span>' for a in pop.index) or "—", unsafe_allow_html=True)
 
-orders, users, books = load_all_data()
+    st.markdown("**Best buyer (aliases) – array of ids**")
+    ids = best.index.tolist()
+    st.markdown("".join(f'<span class="tag tag-g">{i}</span>' for i in ids) or "—", unsafe_allow_html=True)
+    st.code(str(ids))
 
-st.sidebar.title("Store filter")
-selected = st.sidebar.selectbox(
-    "Choose store",
-    options=["All stores"] + STORES,
-    index=0,
-)
-
-if selected == "All stores":
-    o = orders
-    u = users
-    b = books
-else:
-    o = orders[orders["store"] == selected]
-    u = users[users["store"] == selected]
-    b = books[books["store"] == selected]
-
-# 1. Top 5 days by revenue (YYYY-MM-dd)
-daily_rev = (
-    o.groupby("date", as_index=False)["revenue"]
-    .sum()
-    .sort_values("revenue", ascending=False)
-)
-top5 = daily_rev.head(5).copy()
-top5["date"] = top5["date"].apply(lambda d: d.strftime("%Y-%m-%d"))
-
-n_unique_users = o["user_id"].nunique()
-
-n_unique_authors = b["author"].nunique()
-
-merged = o.merge(
-    b[["id", "author"]].drop_duplicates(),
-    left_on="book_id",
-    right_on="id",
-    how="left",
-)
-author_stats = (
-    merged.groupby("author", as_index=False)["quantity"]
-    .sum()
-    .sort_values("quantity", ascending=False)
-)
-if not author_stats.empty:
-    max_qty = author_stats["quantity"].iloc[0]
-    most_popular = author_stats[author_stats["quantity"] == max_qty]["author"].tolist()
-else:
-    most_popular = []
-
-buyer_stats = (
-    o.groupby("user_id", as_index=False)["revenue"]
-    .sum()
-    .sort_values("revenue", ascending=False)
-)
-if not buyer_stats.empty:
-    max_spend = buyer_stats["revenue"].iloc[0]
-    best_buyers = buyer_stats[buyer_stats["revenue"] == max_spend]["user_id"].tolist()
-else:
-    best_buyers = []
-
-st.title("📚 Bookstore Multi-Store Dashboard")
-st.caption(f"Currently viewing: **{selected}**")
-
-tab1, tab2, tab3 = st.tabs([
-    "Overview metrics",
-    "Daily revenue chart",
-    "Top 5 days detail",
-])
-
-with tab1:
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Unique users", f"{n_unique_users:,}")
-    c2.metric("Unique authors", f"{n_unique_authors:,}")
-    c3.metric("Total orders", f"{len(o):,}")
-
-    st.subheader("Most popular author(s)")
-    st.write(most_popular if most_popular else "—")
-
-    st.subheader("Best buyer (with aliases) – array of ids")
-    st.code(str(best_buyers))
-
-with tab2:
-    st.subheader("Daily revenue")
-    daily_sorted = daily_rev.sort_values("date")
-    fig = px.line(
-        daily_sorted,
-        x="date",
-        y="revenue",
-        title=f"Daily revenue – {selected}",
-        labels={"date": "Date", "revenue": "Revenue"},
-    )
-    fig.update_layout(xaxis_tickformat="%Y-%m-%d")
+with t2:
+    fig = px.area(daily.sort_values("date"), x="date", y="revenue",
+                  template="plotly_dark", labels={"revenue": "Revenue ($)"})
+    fig.update_traces(line_color="#3b82f6", fillcolor="rgba(59,130,246,.25)")
+    fig.update_layout(height=450, xaxis_tickformat="%Y-%m-%d", margin=dict(t=30, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-with tab3:
-    st.subheader("Top 5 days by revenue (YYYY-MM-dd)")
-    st.dataframe(
-        top5[["date", "revenue"]].rename(columns={"date": "Date (YYYY-MM-dd)", "revenue": "Revenue"}),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-st.sidebar.markdown("---")
-st.sidebar.info("Data: orders.parquet + users.csv + books.yaml\n(STORE1–STORE5)")
+with t3:
+    st.dataframe(top5[["date", "revenue_fmt"]].rename(columns={"date": "Date (YYYY-MM-dd)", "revenue_fmt": "Revenue"}),
+                 hide_index=True, use_container_width=True)
+    fig = px.bar(top5, x="date", y="revenue", text="revenue_fmt", template="plotly_dark",
+                 color_discrete_sequence=["#3b82f6"])
+    fig.update_traces(textposition="outside")
+    fig.update_layout(height=350, showlegend=False, margin=dict(t=20))
+    st.plotly_chart(fig, use_container_width=True)
