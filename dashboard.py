@@ -123,7 +123,7 @@ with t4:
         client = Groq(api_key=os.environ["GROQ_API_KEY"])
         with st.chat_message("assistant"):
             res = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=st.session_state.msgs,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -146,7 +146,11 @@ with t4:
                         "name": tc.function.name,
                         "content": json.dumps(result, default=str)
                     })
-                res2 = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=st.session_state.msgs, temperature=0)
+                res2 = client.chat.completions.create(
+                    model="openai/gpt-oss-20b",
+                    messages=st.session_state.msgs,
+                    temperature=0
+                )
                 answer = res2.choices[0].message.content
             else:
                 answer = msg.content
